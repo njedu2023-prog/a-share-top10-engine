@@ -105,48 +105,97 @@ def _extract_trade_date_candidates(path: Path) -> List[str]:
 
 def _resolve_trade_date_dir(settings: Settings) -> Tuple[str, Path]:
     """
-    在候选 trade_date_dirs 中，找到最新交易日对应的目录。
-    返回 (trade_date, dir_path)
+    ✅工程级交易日解析（最终稳态版）
+
+    - 支持 TRADE_DATE 指定目标日
+    - 目标日不存在：fallback 到仓库内最新可用交易日
+    - 未指定：直接用最新可用交易日
+    - 扫描逻辑对模板更鲁棒，不依赖当前工作目录
     """
-    best_date: Optional[str] = None
-    best_dir: Optional[Path] = None
+
+    # 0) 读取目标日
+    target_date = os.getenv("TRADE_DATE", "").strip()
+    if target_date:
+        logger.info(f"收到用户指定 TRADE_DATE={target_date}")
+
+    # 1) 统一把相对路径锚定到仓库根目录（从 checkout_dir 推断）
+    # settings.trade_date_dirs 通常是 _warehouse/... 开头
+    repo_root = Path(__file__).resolve().parents[2]
+    warehouse_root = (repo_root / settings.data_repo.checkout_dir).resolve()
+
+    # 2) 构造“扫描根目录”集合：从 trade_date_dirs 推断出若干可扫描父目录
+    scan_roots: List[Path] = []
+    pat = re.compile(r"(20\d{2}[01]\d[0-3]\d)")
 
     for tmpl in settings.trade_date_dirs:
-        # 先扫描这个候选根目录（把 {trade_date} 替换掉会丢信息，所以分两类处理）
-        if "{trade_date}" in tmpl:
-            root = Path(tmpl.replace("{trade_date}", "")).resolve()
+        s = tmpl
+
+        # 把模板路径锚定到 repo_root
+        p = (repo_root / s).resolve() if not Path(s).is_absolute() else Path(s).resolve()
+
+        # 找到模板里 {trade_date} 的位置，取它前面的父目录作为扫描根
+        if "{trade_date}" in s:
+            # 取 "{trade_date}" 之前的路径部分
+            prefix = s.split("{trade_date}", 1)[0].rstrip("/")
+
+            # prefix 可能是 "_warehouse/data/"，我们锚定到 repo_root
+            root = (repo_root / prefix).resolve() if not Path(prefix).is_absolute() else Path(prefix).resolve()
+            scan_roots.append(root)
         else:
-            root = Path(tmpl).resolve()
+            # 没有占位符：就用它自身的父目录去扫
+            scan_roots.append(p.parent)
 
-        if not root.exists():
-            continue
+    # 去重 & 过滤不存在的
+    uniq_roots = []
+    for r in scan_roots:
+        if r.exists() and r not in uniq_roots:
+            uniq_roots.append(r)
 
-        candidates = _extract_trade_date_candidates(root)
-        if not candidates:
-            # 也可能这个 root 本身就是 trade_date 目录
-            m = re.search(r"(20\d{2}[01]\d[0-3]\d)", root.name)
-            if m:
-                candidates = [m.group(1)]
+    # 3) 扫描所有可用日期
+    all_dates: List[Tuple[str, Path]] = []
 
-        for d in candidates:
-            # 具体目录尝试：把模板真正填上
-            dpath = Path(tmpl.format(trade_date=d)).resolve()
-            if not dpath.exists():
+    for root in uniq_roots:
+        # 只扫一层（你原来的策略）
+        for child in root.iterdir():
+            m = pat.search(child.name)
+            if not m:
                 continue
-            if best_date is None or d > best_date:
-                best_date = d
-                best_dir = dpath
+            d = m.group(1)
 
-    if best_date is None or best_dir is None:
+            # 用所有模板去验证真实存在的 trade_dir
+            for tmpl in settings.trade_date_dirs:
+                dpath = (repo_root / tmpl.format(trade_date=d)).resolve() if not Path(tmpl).is_absolute() else Path(tmpl.format(trade_date=d)).resolve()
+                if dpath.exists():
+                    all_dates.append((d, dpath))
+
+    if not all_dates:
         tried = "\n".join([f"- {x}" for x in settings.trade_date_dirs])
         raise FileNotFoundError(
-            "无法定位交易日目录（未找到任何包含 YYYYMMDD 的目录）。\n"
-            "已尝试的 trade_date_dirs:\n"
+            "无法定位任何交易日目录（仓库里完全没有 YYYYMMDD 目录）。\n"
+            "已尝试路径模板:\n"
             f"{tried}\n"
-            "建议：确认数据仓库里 data/ 目录下是否存在类似 20260130 这样的交易日目录。"
+            f"提示：请检查 {warehouse_root} 下是否存在 data/20260129 这种结构。"
         )
 
-    return best_date, best_dir
+    # 取最新
+    all_dates.sort(key=lambda x: x[0])
+    latest_date, latest_dir = all_dates[-1]
+
+    # 4) 若指定目标日：优先尝试
+    if target_date:
+        for tmpl in settings.trade_date_dirs:
+            dpath = (repo_root / tmpl.format(trade_date=target_date)).resolve() if not Path(tmpl).is_absolute() else Path(tmpl.format(trade_date=target_date)).resolve()
+            if dpath.exists():
+                logger.info(f"✅目标交易日目录存在: {target_date} -> {dpath}")
+                return target_date, dpath
+
+        logger.warning(f"⚠️目标交易日 {target_date} 不存在，自动回退到最近可用交易日 {latest_date}")
+        return latest_date, latest_dir
+
+    # 5) 未指定：直接用最新
+    logger.info(f"未指定 trade_date，自动选择最新可用交易日: {latest_date}")
+    return latest_date, latest_dir
+
 
 
 def _find_snapshot_file(trade_dir: Path, candidates: List[str]) -> Optional[Path]:
