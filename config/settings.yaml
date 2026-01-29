@@ -1,5 +1,5 @@
 # ============================================================
-# A股涨停预测系统 - Top10 Engine 完整配置（GitHub Actions 运行版）
+# A股涨停预测系统 - Top10 Engine 最终配置（可直接跑通）
 # Repo: a-share-top10-engine
 # Data Repo: a-share-top3-data
 # ============================================================
@@ -11,7 +11,7 @@ runtime:
   encoding: "utf-8"
 
 # ============================================================
-# 项目参数
+# 项目基本参数
 # ============================================================
 
 project:
@@ -20,8 +20,7 @@ project:
   top_n: 10
 
 # ============================================================
-# 数据仓库设置
-# Actions 会自动 clone 数据仓库到 _warehouse/
+# 数据仓库配置（纯数据仓库）
 # ============================================================
 
 data_repo:
@@ -31,117 +30,88 @@ data_repo:
   checkout_dir: "_warehouse"
 
 # ============================================================
-# 数据目录布局（必须匹配真实结构）
+# 数据目录结构（✅核心）
+# 真实结构：
+# _warehouse/data/raw/2026/20260130/stk_limit.csv
 # ============================================================
 
 data_layout:
 
-  # ✅交易日目录候选（按顺序依次尝试）
+  # ✅交易日目录候选路径（按顺序匹配）
   trade_date_dirs:
 
-    # ✅你当前真实路径
+    # ✅唯一正确路径
     - "_warehouse/data/raw/2026/{trade_date}"
 
-    # ✅未来可扩展兼容
+    # ✅未来兼容备用
     - "_warehouse/data/raw/{trade_date}"
     - "_warehouse/data/{trade_date}"
     - "_warehouse/data/snapshots/{trade_date}"
     - "_warehouse/data/daily/{trade_date}"
 
-    # ✅兜底：扫描整个 data 目录
-    - "_warehouse/data"
-
-  # ✅交易日识别规则：目录名包含 8位日期 YYYYMMDD
+  # ✅识别规则：目录名必须含 YYYYMMDD
   trade_date_pattern: "YYYYMMDD"
 
   # ==========================================================
-  # 快照文件候选名（系统会按顺序匹配）
+  # 快照文件候选名（✅必须包含 stk_limit.csv）
   # ==========================================================
 
   snapshot_candidates:
 
-    # ✅涨停池（最重要）
+    # ✅涨停池文件（你的真实文件）
     limit_up_pool:
-      - "stk_limit.csv"          # ✅你真实文件名
+      - "stk_limit.csv"
       - "limit_up_pool.csv"
       - "zt_pool.csv"
       - "limit_up.csv"
 
-    # 龙虎榜预留
+    # 预留：龙虎榜
     dragon_tiger:
       - "dragon_tiger.csv"
       - "lhb.csv"
 
-    # 日线行情预留
+    # 预留：行情 OHLC
     open_high_close:
       - "ohlc.csv"
       - "daily_ohlc.csv"
       - "quotes.csv"
 
-    # 热门概念预留
+    # 预留：热门概念
     concepts_hot:
       - "concept_hot.csv"
       - "hot_concepts.csv"
+      - "themes_hot.csv"
 
-    # 热门行业预留
+    # 预留：热门行业板块
     sectors_hot:
       - "sector_hot.csv"
+      - "hot_sectors.csv"
       - "industry_hot.csv"
 
-
 # ============================================================
-# ✅输出配置（关键！必须包含 output.files）
+# 输出配置（✅必须包含 output.files）
 # ============================================================
 
 output:
 
-  # 输出目录
-  out_dir: "outputs"
-
-  # ✅build_settings 强制要求 output.files 下必须有：
-  # predict_json / predict_md
+  out_dir: "output"
 
   files:
-
-    # Top10 JSON 输出
     predict_json: "top10_result.json"
-
-    # Top10 Markdown 输出
     predict_md: "top10_report.md"
-
-    # 历史沉淀文件（追加模式）
-    history_file: "learning_history.jsonl"
-
+    history_file: "history.jsonl"
 
 # ============================================================
-# 模型参数（评分权重）
-# ============================================================
-
-weights:
-  limit_up_strength: 0.40
-  continuation_prob: 0.30
-  sentiment_bonus: 0.20
-  liquidity_bonus: 0.10
-
-# ============================================================
-# 概率映射参数（score→prob）
-# ============================================================
-
-prob_map:
-  method: "sigmoid"
-  scale: 1.0
-
-# ============================================================
-# 引擎模式
+# 引擎运行模式（推荐）
 # ============================================================
 
 engine:
 
-  # ✅如果当天目录不存在，则自动 fallback 最近交易日
+  # ✅如果今天没数据，则自动 fallback 最新交易日
   allow_fallback_latest: true
 
-  # ✅缺失关键文件则退出
+  # ✅缺少关键文件直接报错（安全）
   strict_snapshot_check: true
 
-  # ✅强制补足 TopN
+  # ✅TopN 补全输出
   enforce_top_n: true
