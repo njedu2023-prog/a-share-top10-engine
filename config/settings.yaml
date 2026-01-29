@@ -1,92 +1,43 @@
 # ============================================================
 # A股 Top10 涨停预测引擎（a-share-top10-engine）
 # 系统配置文件 config/settings.yaml
-#
-# 关键逻辑：
-#   - data_repo 指向数据仓库 a-share-top3-data
-#   - engine_repo 本仓库负责计算输出 Top10
 # ============================================================
 
-# ------------------------------
-# 数据仓库（Top3 Data Warehouse）
-# ------------------------------
 data_repo:
   owner: njedu2023-prog
   name: a-share-top3-data
   branch: main
 
-  # 数据仓库中每日快照路径（你仓库真实目录）
-  snapshot_dir: snapshots
+  # ✅ 真实数据快照目录（与你的仓库一致：data/raw/2026/20260129/...）
+  snapshot_dir: data/raw
 
-  # 仓库中已经标注好的涨停池/龙虎榜等标签目录（如有）
+  # 如果你确实有 tags 目录就保留；没有也没关系（脚本不一定用）
   tags_dir: tags
 
-
-# ------------------------------
-# 引擎输出目录（Top10 Engine）
-# ------------------------------
-engine_output:
-  root_dir: outputs
-
-  # 每日预测输出
-  daily_dir: outputs/daily
-
-  # 历史归档
-  history_dir: outputs/history
-
-  # 日志
-  log_dir: outputs/logs
-
-
-# ------------------------------
-# 运行模式设置
-# ------------------------------
 run_mode:
-
-  # 是否自动拉取数据仓库最新数据
   auto_pull_data_repo: true
-
-  # 如果为空则自动识别最新交易日
   trade_date: ""
 
-
-# ------------------------------
-# Top10 输出控制
-# ------------------------------
 top10:
-
-  # 输出多少只股票
   n: 10
 
-  # 是否生成 markdown 报告
-  export_markdown: true
+# ✅ 关键：脚本要求 output.files 至少包含 predict_json / predict_md
+output:
+  root_dir: outputs
+  files:
+    # 你想放哪里都行，但建议固定到 outputs/daily
+    predict_json: outputs/daily/predict.json
+    predict_md: outputs/daily/predict.md
 
-  # 是否生成 json 数据
-  export_json: true
+  # 可选：顺手把历史/日志目录也集中在 output 下（如果脚本支持会用到）
+  history_dir: outputs/history
+  log_dir: outputs/logs
 
-  # 是否保留回测命中记录
-  save_verify_history: true
-
-
-# ------------------------------
-# 环境变量读取（TuShare）
-# ------------------------------
 secrets:
-
-  # workflow 中传入的 env: TUSHARE_TOKEN
   tushare_token_env: TUSHARE_TOKEN
 
-
-# ------------------------------
-# 系统声明
-# ------------------------------
 system:
-
   name: "A股涨停预测系统 Top10 Engine"
-
-  # 华哥系统共识：
-  #   a-share-top3-data  = 数据仓库
-  #   a-share-top10-engine = 计算引擎
   architecture:
     warehouse: a-share-top3-data
     engine: a-share-top10-engine
