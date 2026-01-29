@@ -1,7 +1,12 @@
 name: Top10 Engine - Scheduled Run
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "可选：指定交易日（YYYYMMDD）。留空则自动选择最新交易日"
+        required: false
+        default: ""
   schedule:
     # 北京时间 周一到周五 18:30 运行（UTC 10:30）
     - cron: "30 10 * * 1-5"
@@ -18,9 +23,14 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -36,5 +46,22 @@ jobs:
       - name: Run engine
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TRADE_DATE: ${{ inputs.trade_date }}
         run: |
           python -m scripts.run
+
+      - name: Commit outputs (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 只提交输出目录（按你项目目前的写出路径）
+          git add -A output outputs || true
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update top10 outputs [skip ci]"
+          git push
