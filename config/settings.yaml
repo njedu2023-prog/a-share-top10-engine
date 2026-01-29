@@ -18,7 +18,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: top10-engine-${{ github.ref }}
+  # 比你原来的更稳：把 workflow 名也纳入，避免未来多工作流冲突
+  group: top10-engine-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -42,18 +43,54 @@ jobs:
 
       - name: Install deps
         run: |
+          set -e
+          python -V
           python -m pip install --upgrade pip
+          test -f requirements.txt || (echo "ERROR: requirements.txt not found" && exit 1)
           pip install -r requirements.txt
+
+      # ✅ 关键：保证 schedule 触发时也一定有 TRADE_DATE
+      - name: Resolve trade date
+        shell: bash
+        run: |
+          set -e
+          INPUT_TD="${{ inputs.trade_date }}"
+          if [ -n "$INPUT_TD" ]; then
+            TD="$INPUT_TD"
+          else
+            TD="$(date +%Y%m%d)"
+          fi
+          echo "TRADE_DATE=$TD" >> $GITHUB_ENV
+          echo "Resolved TRADE_DATE=$TD"
+
+      # ✅ 关键：提前校验 settings.yaml（你这次失败就是缺 data_repo.owner/name）
+      - name: Validate settings
+        run: |
+          set -e
+          test -f config/settings.yaml || (echo "ERROR: missing config/settings.yaml" && exit 1)
+          echo "----- config/settings.yaml (head) -----"
+          sed -n '1,200p' config/settings.yaml
+          python - << 'PY'
+          import yaml
+          with open("config/settings.yaml","r",encoding="utf-8") as f:
+            d = yaml.safe_load(f) or {}
+          dr = d.get("data_repo") or {}
+          assert dr.get("owner"), "config/settings.yaml 缺少 data_repo.owner"
+          assert dr.get("name"),  "config/settings.yaml 缺少 data_repo.name"
+          print("settings OK:", dr.get("owner"), dr.get("name"))
+          PY
 
       - name: Run engine
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-          TRADE_DATE: ${{ inputs.trade_date }}
         run: |
+          set -e
+          echo "Using TRADE_DATE=$TRADE_DATE"
           python -m scripts.run
 
       - name: Commit all outputs (full persistence)
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
