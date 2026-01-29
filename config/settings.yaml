@@ -1,107 +1,92 @@
-name: Top10 Engine - Scheduled Run
+# ============================================================
+# A股 Top10 涨停预测引擎（a-share-top10-engine）
+# 系统配置文件 config/settings.yaml
+#
+# 关键逻辑：
+#   - data_repo 指向数据仓库 a-share-top3-data
+#   - engine_repo 本仓库负责计算输出 Top10
+# ============================================================
 
-on:
-  workflow_dispatch:
-    inputs:
-      trade_date:
-        description: "可选：指定交易日（YYYYMMDD）。留空则自动选择最新交易日"
-        required: false
-        default: ""
+# ------------------------------
+# 数据仓库（Top3 Data Warehouse）
+# ------------------------------
+data_repo:
+  owner: njedu2023-prog
+  name: a-share-top3-data
+  branch: main
 
-  schedule:
-    # 北京时间 周一到周五 18:30 运行（UTC 10:30）
-    - cron: "30 10 * * 1-5"
-    # 北京时间 周一到周五 19:05 运行（UTC 11:05）
-    - cron: "5 11 * * 1-5"
+  # 数据仓库中每日快照路径（你仓库真实目录）
+  snapshot_dir: snapshots
 
-permissions:
-  contents: write
+  # 仓库中已经标注好的涨停池/龙虎榜等标签目录（如有）
+  tags_dir: tags
 
-concurrency:
-  # 比你原来的更稳：把 workflow 名也纳入，避免未来多工作流冲突
-  group: top10-engine-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
-jobs:
-  run:
-    runs-on: ubuntu-latest
-    env:
-      TZ: Asia/Shanghai
-      PYTHONUTF8: "1"
+# ------------------------------
+# 引擎输出目录（Top10 Engine）
+# ------------------------------
+engine_output:
+  root_dir: outputs
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  # 每日预测输出
+  daily_dir: outputs/daily
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
+  # 历史归档
+  history_dir: outputs/history
 
-      - name: Install deps
-        run: |
-          set -e
-          python -V
-          python -m pip install --upgrade pip
-          test -f requirements.txt || (echo "ERROR: requirements.txt not found" && exit 1)
-          pip install -r requirements.txt
+  # 日志
+  log_dir: outputs/logs
 
-      # ✅ 关键：保证 schedule 触发时也一定有 TRADE_DATE
-      - name: Resolve trade date
-        shell: bash
-        run: |
-          set -e
-          INPUT_TD="${{ inputs.trade_date }}"
-          if [ -n "$INPUT_TD" ]; then
-            TD="$INPUT_TD"
-          else
-            TD="$(date +%Y%m%d)"
-          fi
-          echo "TRADE_DATE=$TD" >> $GITHUB_ENV
-          echo "Resolved TRADE_DATE=$TD"
 
-      # ✅ 关键：提前校验 settings.yaml（你这次失败就是缺 data_repo.owner/name）
-      - name: Validate settings
-        run: |
-          set -e
-          test -f config/settings.yaml || (echo "ERROR: missing config/settings.yaml" && exit 1)
-          echo "----- config/settings.yaml (head) -----"
-          sed -n '1,200p' config/settings.yaml
-          python - << 'PY'
-          import yaml
-          with open("config/settings.yaml","r",encoding="utf-8") as f:
-            d = yaml.safe_load(f) or {}
-          dr = d.get("data_repo") or {}
-          assert dr.get("owner"), "config/settings.yaml 缺少 data_repo.owner"
-          assert dr.get("name"),  "config/settings.yaml 缺少 data_repo.name"
-          print("settings OK:", dr.get("owner"), dr.get("name"))
-          PY
+# ------------------------------
+# 运行模式设置
+# ------------------------------
+run_mode:
 
-      - name: Run engine
-        env:
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-        run: |
-          set -e
-          echo "Using TRADE_DATE=$TRADE_DATE"
-          python -m scripts.run
+  # 是否自动拉取数据仓库最新数据
+  auto_pull_data_repo: true
 
-      - name: Commit all outputs (full persistence)
-        run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+  # 如果为空则自动识别最新交易日
+  trade_date: ""
 
-          # ✅ 只落库 outputs 下的所有产物：预测结果、md/json、logs、verify/history.jsonl 等
-          # ⚠️ 不要把 _warehouse 之类的数据拉取目录提交进去
-          git add -A outputs
 
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
+# ------------------------------
+# Top10 输出控制
+# ------------------------------
+top10:
 
-          git commit -m "chore: persist run outputs [skip ci]"
-          git push
+  # 输出多少只股票
+  n: 10
+
+  # 是否生成 markdown 报告
+  export_markdown: true
+
+  # 是否生成 json 数据
+  export_json: true
+
+  # 是否保留回测命中记录
+  save_verify_history: true
+
+
+# ------------------------------
+# 环境变量读取（TuShare）
+# ------------------------------
+secrets:
+
+  # workflow 中传入的 env: TUSHARE_TOKEN
+  tushare_token_env: TUSHARE_TOKEN
+
+
+# ------------------------------
+# 系统声明
+# ------------------------------
+system:
+
+  name: "A股涨停预测系统 Top10 Engine"
+
+  # 华哥系统共识：
+  #   a-share-top3-data  = 数据仓库
+  #   a-share-top10-engine = 计算引擎
+  architecture:
+    warehouse: a-share-top3-data
+    engine: a-share-top10-engine
