@@ -1,0 +1,36 @@
+name: Top10 Engine - Scheduled Run
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # 北京时间 周一到周五 18:30 运行（UTC 10:30）
+    - cron: "30 10 * * 1-5"
+    # 北京时间 周一到周五 19:05 运行（UTC 11:05）
+    - cron: "5 11 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run engine
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+        run: |
+          python -m scripts.run
