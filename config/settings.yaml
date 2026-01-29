@@ -1,117 +1,70 @@
-# ============================================================
-# A股涨停预测系统 - Top10 Engine 最终配置（可直接跑通）
-# Repo: a-share-top10-engine
-# Data Repo: a-share-top3-data
-# ============================================================
+name: Top10 Engine - Scheduled Run
 
-version: "A-Share-Top10-Engine-V1"
+on:
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "可选：指定交易日（YYYYMMDD）。留空则自动选择最新交易日"
+        required: false
+        default: ""
 
-runtime:
-  timezone: "Asia/Shanghai"
-  encoding: "utf-8"
+  schedule:
+    # 北京时间 周一到周五 18:30 运行（UTC 10:30）
+    - cron: "30 10 * * 1-5"
+    # 北京时间 周一到周五 19:05 运行（UTC 11:05）
+    - cron: "5 11 * * 1-5"
 
-# ============================================================
-# 项目基本参数
-# ============================================================
+permissions:
+  contents: write
 
-project:
-  universe: "A-share"
-  target: "limit-up_continuation"
-  top_n: 10
+concurrency:
+  group: top10-engine-${{ github.ref }}
+  cancel-in-progress: true
 
-# ============================================================
-# 数据仓库配置（纯数据仓库）
-# ============================================================
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
 
-data_repo:
-  owner: "njedu2023-prog"
-  name: "a-share-top3-data"
-  ref: "main"
-  checkout_dir: "_warehouse"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-# ============================================================
-# 数据目录结构（✅核心）
-# 真实结构：
-# _warehouse/data/raw/2026/20260130/stk_limit.csv
-# ============================================================
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
-data_layout:
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-  # ✅交易日目录候选路径（按顺序匹配）
-  trade_date_dirs:
+      - name: Run engine
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TRADE_DATE: ${{ inputs.trade_date }}
+        run: |
+          python -m scripts.run
 
-    # ✅唯一正确路径
-    - "_warehouse/data/raw/2026/{trade_date}"
+      - name: Commit all outputs (full persistence)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-    # ✅未来兼容备用
-    - "_warehouse/data/raw/{trade_date}"
-    - "_warehouse/data/{trade_date}"
-    - "_warehouse/data/snapshots/{trade_date}"
-    - "_warehouse/data/daily/{trade_date}"
+          # ✅ 只落库 outputs 下的所有产物：预测结果、md/json、logs、verify/history.jsonl 等
+          # ⚠️ 不要把 _warehouse 之类的数据拉取目录提交进去
+          git add -A outputs
 
-  # ✅识别规则：目录名必须含 YYYYMMDD
-  trade_date_pattern: "YYYYMMDD"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
 
-  # ==========================================================
-  # 快照文件候选名（✅必须包含 stk_limit.csv）
-  # ==========================================================
-
-  snapshot_candidates:
-
-    # ✅涨停池文件（你的真实文件）
-    limit_up_pool:
-      - "stk_limit.csv"
-      - "limit_up_pool.csv"
-      - "zt_pool.csv"
-      - "limit_up.csv"
-
-    # 预留：龙虎榜
-    dragon_tiger:
-      - "dragon_tiger.csv"
-      - "lhb.csv"
-
-    # 预留：行情 OHLC
-    open_high_close:
-      - "ohlc.csv"
-      - "daily_ohlc.csv"
-      - "quotes.csv"
-
-    # 预留：热门概念
-    concepts_hot:
-      - "concept_hot.csv"
-      - "hot_concepts.csv"
-      - "themes_hot.csv"
-
-    # 预留：热门行业板块
-    sectors_hot:
-      - "sector_hot.csv"
-      - "hot_sectors.csv"
-      - "industry_hot.csv"
-
-# ============================================================
-# 输出配置（✅必须包含 output.files）
-# ============================================================
-
-output:
-
-  out_dir: "output"
-
-  files:
-    predict_json: "top10_result.json"
-    predict_md: "top10_report.md"
-    history_file: "history.jsonl"
-
-# ============================================================
-# 引擎运行模式（推荐）
-# ============================================================
-
-engine:
-
-  # ✅如果今天没数据，则自动 fallback 最新交易日
-  allow_fallback_latest: true
-
-  # ✅缺少关键文件直接报错（安全）
-  strict_snapshot_check: true
-
-  # ✅TopN 补全输出
-  enforce_top_n: true
+          git commit -m "chore: persist run outputs [skip ci]"
+          git push
