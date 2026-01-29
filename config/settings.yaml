@@ -1,96 +1,153 @@
-# A股涨停预测系统 - Top10 主程序配置（云端GitHub运行）
+# ============================================================
+# A股涨停预测系统 - Top10 Engine 主程序配置（GitHub Actions 云端运行）
+# Repo: a-share-top10-engine
+# Data Repo: a-share-top3-data
+# ============================================================
+
 version: "A-Share-Top10-Engine-V1"
 
 runtime:
   timezone: "Asia/Shanghai"
   encoding: "utf-8"
 
+# ============================================================
+# 项目基本信息
+# ============================================================
+
 project:
   universe: "A-share"
   target: "limit-up_continuation"
   top_n: 10
 
-# 数据仓库（你已经就绪的那个“纯数据仓库”）
-# 主程序会在 Actions 里把它 checkout 到本仓库的工作目录中
+# ============================================================
+# 数据仓库设置（纯数据仓库 a-share-top3-data）
+# 主程序 Actions 执行时会自动 clone 到本地 _warehouse/
+# ============================================================
+
 data_repo:
   owner: "njedu2023-prog"
-  name: "a-share-top3-data"   # 注意：这里先写你现在的数据仓库名（后续你若改名，再改这里一行即可）
+  name: "a-share-top3-data"
   ref: "main"
-  checkout_dir: "_warehouse"  # 本仓库运行时的数据仓库本地目录名（Actions里用）
+  checkout_dir: "_warehouse"
 
-# 数据定位策略：支持多种常见目录结构自动探测
+# ============================================================
+# 数据目录布局（核心！）
+# 必须严格匹配你仓库里的真实目录结构
+# ============================================================
+
 data_layout:
-  # 交易日目录可能的候选位置（主程序会按顺序尝试，找到就用）
+
+  # ------------------------------------------------------------
+  # ✅交易日目录候选（按优先级依次尝试）
+  #
+  # 你真实结构是：
+  # _warehouse/data/raw/2026/20260130/
+  #
+  # 所以必须加这一条，否则永远找不到交易日目录
+  # ------------------------------------------------------------
+
   trade_date_dirs:
+
+    # ✅主路径（你当前唯一正确路径）
+    - "_warehouse/data/raw/2026/{trade_date}"
+
+    # ✅未来扩展（后续如果你改结构也能兼容）
+    - "_warehouse/data/raw/{trade_date}"
     - "_warehouse/data/{trade_date}"
     - "_warehouse/data/snapshots/{trade_date}"
     - "_warehouse/data/daily/{trade_date}"
-    - "_warehouse/data/{trade_date}/snapshots"
+
+    # ✅兜底：允许扫描整个 data 目录
     - "_warehouse/data"
 
-  # “交易日”识别规则：目录名或文件名中出现 8位日期 YYYYMMDD
+  # ------------------------------------------------------------
+  # 交易日识别规则：目录名必须包含 YYYYMMDD
+  # ------------------------------------------------------------
+
   trade_date_pattern: "YYYYMMDD"
 
-  # 快照文件候选（主程序会在 trade_date_dir 下按优先级寻找）
-  # 你数据仓库实际叫什么文件名都可以，先覆盖常见口径；找不到会给出明确报错清单
+  # ============================================================
+  # 快照文件候选名（系统会按顺序匹配）
+  # 你真实文件叫 stk_limit.csv，所以必须加进来
+  # ============================================================
+
   snapshot_candidates:
+
+    # ----------------------------------------------------------
+    # 涨停池（最重要）
+    # ----------------------------------------------------------
+
     limit_up_pool:
+      - "stk_limit.csv"          # ✅你真实文件名
       - "limit_up_pool.csv"
       - "zt_pool.csv"
       - "limit_up.csv"
       - "pool_limitup.csv"
 
+    # ----------------------------------------------------------
+    # 龙虎榜（预留）
+    # ----------------------------------------------------------
+
     dragon_tiger:
       - "dragon_tiger.csv"
       - "lhb.csv"
+
+    # ----------------------------------------------------------
+    # 日线行情（预留）
+    # ----------------------------------------------------------
 
     open_high_close:
       - "ohlc.csv"
       - "daily_ohlc.csv"
       - "quotes.csv"
 
+    # ----------------------------------------------------------
+    # 热门概念（预留）
+    # ----------------------------------------------------------
+
     concepts_hot:
       - "concept_hot.csv"
       - "hot_concepts.csv"
       - "themes_hot.csv"
+
+    # ----------------------------------------------------------
+    # 热门行业板块（预留）
+    # ----------------------------------------------------------
 
     sectors_hot:
       - "sector_hot.csv"
       - "hot_sectors.csv"
       - "industry_hot.csv"
 
+# ============================================================
+# 输出设置
+# ============================================================
+
 output:
-  # 所有输出统一写到本仓库，便于 GitHub Pages / API / 人工查看
-  base_dir: "outputs"
-  predict_dir: "outputs/predict"
-  verify_dir: "outputs/verify"
-  logs_dir: "outputs/logs"
 
-  # 本次运行输出的核心文件名（trade_date 会自动替换）
-  files:
-    predict_json: "outputs/predict/predict_{trade_date}.json"
-    predict_md:   "outputs/predict/predict_{trade_date}.md"
-    verify_json:  "outputs/verify/verify_{trade_date}.json"
-    verify_md:    "outputs/verify/verify_{trade_date}.md"
+  # 输出目录（主程序运行完写入这里）
+  out_dir: "output"
 
-scoring:
-  # 五因子权重（先给默认工程可跑版本；你后续用PDF的权重我们再严格对齐）
-  weights:
-    w_limitup_momentum: 0.30
-    w_order_imbalance:  0.20
-    w_hot_concept:      0.20
-    w_dragon_tiger:     0.15
-    w_market_filter:    0.15
+  # 输出报告文件名
+  report_file: "top10_report.md"
 
-  # 分数到概率的映射（单调映射，保证可解释）
-  prob_map:
-    method: "sigmoid"
-    k: 6.0
-    x0: 0.50
+  # 是否保存 JSON 结构化输出
+  save_json: true
 
-learning:
-  enabled: true
-  history_window_days: 60
-  # 核验结果沉淀（用于长期回测、命中率统计、后续自学习）
-  storage:
-    file: "outputs/verify/history.jsonl"
+  # JSON 输出文件名
+  json_file: "top10_result.json"
+
+# ============================================================
+# 引擎运行模式
+# ============================================================
+
+engine:
+
+  # 如果今天目录为空，则自动 fallback 最新交易日
+  allow_fallback_latest: true
+
+  # 若缺失关键文件，则直接报错退出
+  strict_snapshot_check: true
+
+  # Top10 输出是否强制补足
+  enforce_top_n: true
