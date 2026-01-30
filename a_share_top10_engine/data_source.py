@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
 import pandas as pd
 
 
@@ -28,7 +29,7 @@ class DataSource:
     统一数据入口：
     - local_root: 指向 a-share-top3-data 仓库根目录（本地模式）
     - github_raw_base: 线上模式的 raw base（例如: https://raw.githubusercontent.com/<user>/<repo>/<branch>）
-    二选一即可。
+      二选一即可。
     """
     local_root: Optional[Path] = None
     github_raw_base: Optional[str] = None  # 不要以 / 结尾
