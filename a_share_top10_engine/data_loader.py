@@ -67,13 +67,30 @@ class DataLoader:
     # Internal CSV Reader
     # -------------------------
     def _read_csv(self, filename: str) -> pd.DataFrame:
+        """
+        兼容“文件存在但为空”的情况：
+        - 0字节空文件：直接返回空 DataFrame（避免 pandas.errors.EmptyDataError）
+        - 非 0 字节但内容不含列：捕获 EmptyDataError，返回空 DataFrame
+        """
         path = self.base_dir / filename
         if not path.exists():
             raise FileNotFoundError(
                 f"[DataLoader] 文件不存在: {path}\n"
                 f"请检查数据仓库是否包含该文件。"
             )
-        return pd.read_csv(path)
+
+        # 关键修复点：空文件直接返回空 df，不让系统崩掉
+        try:
+            if path.stat().st_size == 0:
+                return pd.DataFrame()
+        except OSError:
+            # 极端情况下 stat 失败，继续走 read_csv，并在下面兜底
+            pass
+
+        try:
+            return pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            return pd.DataFrame()
 
     # -------------------------
     # Public Load Functions
