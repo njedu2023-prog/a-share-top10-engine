@@ -1,0 +1,33 @@
+{
+  "predict_date": "20260130",
+  "target_date": "20260130",
+  "verify_date": "20260130",
+  "top_n": 10,
+  "hit_count": 10,
+  "hit_rate": 1.0,
+  "hit_codes": [
+    "000546.SZ",
+    "002155.SZ",
+    "002218.SZ",
+    "002828.SZ",
+    "600313.SH",
+    "600371.SH",
+    "600497.SH",
+    "601600.SH",
+    "603979.SH",
+    "605289.SH"
+  ],
+  "predicted_codes": [
+    "603979.SH",
+    "002218.SZ",
+    "002155.SZ",
+    "002828.SZ",
+    "601600.SH",
+    "000546.SZ",
+    "600371.SH",
+    "600497.SH",
+    "605289.SH",
+    "600313.SH"
+  ],
+  "trade_dir": "/home/runner/work/a-share-top10-engine/a-share-top10-engine/_warehouse/data/raw/2026/20260130"
+}
