@@ -297,14 +297,56 @@ def _resolve_trade_date_dir(settings: Settings) -> Tuple[str, Path]:
 # -------------------------
 
 def load_limitup_pool(trade_dir: Path, snapshot_candidates: List[str]) -> pd.DataFrame:
+    # ✅ 只改这一处：遇到空文件/只有表头/解析失败时，跳过继续找下一个候选文件
     for fn in snapshot_candidates:
         fp = trade_dir / fn
-        if fp.exists():
+        if not fp.exists() or not fp.is_file():
+            continue
+
+        # 0字节/过小文件直接跳过
+        try:
+            if fp.stat().st_size < 5:
+                logger.warning(f"候选文件过小/疑似空文件，跳过: {fp}")
+                continue
+        except Exception:
+            continue
+
+        # 文本层快速判断：至少需要“表头 + 一行数据”
+        try:
+            non_empty_lines = []
+            with fp.open("r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if s:
+                        non_empty_lines.append(s)
+                    if len(non_empty_lines) >= 2:
+                        break
+            if len(non_empty_lines) < 2:
+                logger.warning(f"候选文件仅表头/无数据行，跳过: {fp}")
+                continue
+        except Exception:
+            # 读文本失败不直接判死，交给 pandas 再试
+            pass
+
+        # pandas 读取：EmptyDataError / ParserError / 空DataFrame 都跳过
+        try:
             df = pd.read_csv(fp)
+            if df is None or df.empty or len(df.columns) == 0:
+                logger.warning(f"候选文件读取为空或无列，跳过: {fp}")
+                continue
             df["__source_file__"] = fn
             return df
+        except pd.errors.EmptyDataError:
+            logger.warning(f"候选文件无可解析列(EmptyDataError)，跳过: {fp}")
+            continue
+        except Exception as e:
+            logger.warning(f"候选文件解析失败，跳过: {fp}，err={e}")
+            continue
+
     raise FileNotFoundError(
-        "未找到任何涨停池候选文件: " + ", ".join(snapshot_candidates) + f" in {trade_dir}"
+        "未找到任何可用涨停池候选文件（可能都是空/仅表头/损坏）: "
+        + ", ".join(snapshot_candidates)
+        + f" in {trade_dir}"
     )
 
 
