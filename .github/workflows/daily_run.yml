@@ -2,29 +2,26 @@ name: Top10 Engine - Scheduled Run
 
 on:
   schedule:
-    # 交易日早上 08:00（北京时间）跑一次：UTC 00:00
+    # 每个交易日早上 08:00 (Asia/Shanghai) ≈ 00:00 UTC
     - cron: "0 0 * * 1-5"
   workflow_dispatch:
-    inputs:
-      trade_date:
-        description: "可选：指定交易日 YYYYMMDD（不填则自动取仓库最新目录）"
-        required: false
-        default: ""
 
 permissions:
   contents: write
 
 concurrency:
-  group: top10-engine
-  cancel-in-progress: true
+  group: top10-engine-daily
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout engine repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -34,23 +31,73 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install -r requirements.txt
+
+      # 关键：提前把数据仓库 clone 下来，这样我们能可靠地解析出“最新交易日”
+      - name: Prepare warehouse (clone data repo)
+        run: |
+          set -e
+          rm -rf _warehouse
+          git clone --depth 1 --branch main https://github.com/njedu2023-prog/a-share-top3-data.git _warehouse
+          echo "Warehouse prepared: $(ls -la _warehouse | head -n 20)"
+
+      - name: Resolve trade date
+        id: resolve_trade_date
+        run: |
+          set -e
+
+          # 1) 优先匹配你现在的数据结构：data/raw/YYYY/YYYYMMDD
+          LATEST="$(ls -d _warehouse/data/raw/*/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
+            | awk -F/ '{print $NF}' | sort | tail -n 1)"
+
+          # 2) 兼容：data/raw/YYYYMMDD
+          if [ -z "$LATEST" ]; then
+            LATEST="$(ls -d _warehouse/data/raw/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
+              | awk -F/ '{print $NF}' | sort | tail -n 1)"
+          fi
+
+          # 3) 兼容：data/YYYYMMDD
+          if [ -z "$LATEST" ]; then
+            LATEST="$(ls -d _warehouse/data/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
+              | awk -F/ '{print $NF}' | sort | tail -n 1)"
+          fi
+
+          # 4) 兼容：仓库根目录 YYYYMMDD
+          if [ -z "$LATEST" ]; then
+            LATEST="$(ls -d _warehouse/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
+              | awk -F/ '{print $NF}' | sort | tail -n 1)"
+          fi
+
+          if [ -z "$LATEST" ]; then
+            echo "❌ Cannot resolve TRADE_DATE from _warehouse. Directory samples:"
+            find _warehouse -maxdepth 4 -type d | head -n 200
+            exit 1
+          fi
+
+          echo "✅ Resolved TRADE_DATE=$LATEST"
+          echo "TRADE_DATE=$LATEST" >> $GITHUB_ENV
 
       - name: Run engine
         env:
-          # 关键：允许手动指定；不指定则留空，脚本会自动找最新交易日目录
-          TRADE_DATE: ${{ inputs.trade_date }}
+          TRADE_DATE: ${{ env.TRADE_DATE }}
         run: |
+          set -e
+          echo "Using TRADE_DATE=${TRADE_DATE}"
           python -m scripts.run
 
       - name: Commit outputs (if changed)
         run: |
+          set -e
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 只提交 outputs 相关产物
+          git add outputs || true
+
           if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "outputs: update predictions"
-            git push
+            echo "No output changes to commit."
+            exit 0
           fi
+
+          git commit -m "chore: update outputs for ${TRADE_DATE}"
+          git push
