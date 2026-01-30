@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,16 +27,19 @@ class DataRepo:
     ref: str = "main"
     checkout_dir: str = "_warehouse"
 
+
 @dataclass
 class ProbMap:
     method: str = "sigmoid"
     k: float = 0.18
 
+
 @dataclass
 class OutputCfg:
     dir: str = "outputs"
-    files: Dict[str, str] = None  # predict_json / predict_md
+    files: Dict[str, str] = field(default_factory=dict)  # predict_json / predict_md
     history_append_jsonl: str = "outputs/history/history.jsonl"
+
 
 @dataclass
 class Settings:
@@ -44,14 +47,14 @@ class Settings:
     timezone: str = "Asia/Shanghai"
     top_n: int = 10
 
-    data_repo: DataRepo = None
-    trade_date_dirs: List[str] = None
-    snapshot_candidates: List[str] = None
+    data_repo: DataRepo = field(default_factory=lambda: DataRepo(owner="", name=""))
+    trade_date_dirs: List[str] = field(default_factory=list)
+    snapshot_candidates: List[str] = field(default_factory=list)
 
-    weights: Dict[str, float] = None
-    prob_map: ProbMap = ProbMap()
+    weights: Dict[str, float] = field(default_factory=dict)
+    prob_map: ProbMap = field(default_factory=ProbMap)
 
-    output: OutputCfg = None
+    output: OutputCfg = field(default_factory=OutputCfg)
 
 
 # -------------------------
@@ -61,17 +64,21 @@ class Settings:
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+
 def _now_str(tz: str) -> str:
     # GitHub runner 不一定有 tz database 完整配置；这里用本地时间即可
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
 
 def _read_yaml(p: Path) -> Dict[str, Any]:
     with p.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
+
 def _run(cmd: List[str], cwd: Optional[Path] = None) -> None:
     logger.info(" ".join(cmd))
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
+
 
 def _git_clone_or_update(owner: str, name: str, ref: str, dest: Path) -> None:
     url = f"https://github.com/{owner}/{name}.git"
@@ -85,12 +92,14 @@ def _git_clone_or_update(owner: str, name: str, ref: str, dest: Path) -> None:
         _ensure_dir(dest.parent)
         _run(["git", "clone", "--depth", "1", "--branch", ref, url, str(dest)])
 
+
 def _fmt_template(tpl: str, yyyymmdd: str) -> str:
     yyyy = yyyymmdd[:4]
     return (
         tpl.replace("{YYYYMMDD}", yyyymmdd)
            .replace("{YYYY}", yyyy)
     )
+
 
 def _extract_yyyymmdd_from_path(p: Path) -> Optional[str]:
     # 抓取路径里最像 YYYYMMDD 的段
@@ -219,8 +228,10 @@ def load_limitup_pool(trade_dir: Path, snapshot_candidates: List[str]) -> pd.Dat
         "未找到任何涨停池候选文件: " + ", ".join(snapshot_candidates) + f" in {trade_dir}"
     )
 
+
 def _to_numeric_safe(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce")
+
 
 def score_stocks(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
     df2 = df.copy()
@@ -262,6 +273,7 @@ def score_stocks(df: pd.DataFrame, weights: Dict[str, float]) -> pd.DataFrame:
     df2["score"] = score
     return df2
 
+
 def to_probability(df: pd.DataFrame, prob_map: ProbMap) -> pd.DataFrame:
     df2 = df.copy()
     if prob_map.method.lower() == "sigmoid":
@@ -275,6 +287,7 @@ def to_probability(df: pd.DataFrame, prob_map: ProbMap) -> pd.DataFrame:
         else:
             df2["prob"] = (df2["score"] - mn) / (mx - mn)
     return df2
+
 
 def write_outputs(trade_date: str, top_df: pd.DataFrame, settings: Settings) -> Tuple[Path, Path]:
     repo_root = Path.cwd().resolve()
@@ -318,6 +331,7 @@ def write_outputs(trade_date: str, top_df: pd.DataFrame, settings: Settings) -> 
     predict_md.write_text("\n".join(lines) + "\n", encoding=settings.encoding)
 
     return predict_json, predict_md
+
 
 def append_history(trade_date: str, top_df: pd.DataFrame, settings: Settings) -> None:
     repo_root = Path.cwd().resolve()
