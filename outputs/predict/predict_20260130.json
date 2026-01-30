@@ -1,11 +1,11 @@
 {
   "trade_date": "20260130",
-  "generated_at": "2026-01-30T11:18:36",
+  "generated_at": "2026-01-30T11:46:09",
   "top_n": 10,
   "items": [
     {
-      "trade_date": 20260130,
       "ts_code": "603979.SH",
+      "trade_date": 20260130,
       "industry": "采掘行业",
       "name": "金诚信",
       "close": 79.02,
@@ -27,8 +27,8 @@
       "prob": 0.8500832922365128
     },
     {
-      "trade_date": 20260130,
       "ts_code": "002218.SZ",
+      "trade_date": 20260130,
       "industry": "光伏设备",
       "name": "拓日新能",
       "close": 5.9,
@@ -50,8 +50,8 @@
       "prob": 0.7546528279383881
     },
     {
-      "trade_date": 20260130,
       "ts_code": "002155.SZ",
+      "trade_date": 20260130,
       "industry": "贵金属",
       "name": "湖南黄金",
       "close": 37.0,
@@ -73,8 +73,8 @@
       "prob": 0.7463382093581887
     },
     {
-      "trade_date": 20260130,
       "ts_code": "002828.SZ",
+      "trade_date": 20260130,
       "industry": "采掘行业",
       "name": "贝肯能源",
       "close": 13.09,
@@ -96,8 +96,8 @@
       "prob": 0.729425459512284
     },
     {
-      "trade_date": 20260130,
       "ts_code": "601600.SH",
+      "trade_date": 20260130,
       "industry": "有色金属",
       "name": "中国铝业",
       "close": 14.13,
@@ -119,8 +119,8 @@
       "prob": 0.708636643404194
     },
     {
-      "trade_date": 20260130,
       "ts_code": "000546.SZ",
+      "trade_date": 20260130,
       "industry": "环保行业",
       "name": "金圆股份",
       "close": 5.83,
@@ -142,8 +142,8 @@
       "prob": 0.6975683361243833
     },
     {
-      "trade_date": 20260130,
       "ts_code": "600371.SH",
+      "trade_date": 20260130,
       "industry": "农牧饲渔",
       "name": "万向德农",
       "close": 10.29,
@@ -165,8 +165,8 @@
       "prob": 0.6962389057394053
     },
     {
-      "trade_date": 20260130,
       "ts_code": "600497.SH",
+      "trade_date": 20260130,
       "industry": "有色金属",
       "name": "驰宏锌锗",
       "close": 9.82,
@@ -188,8 +188,8 @@
       "prob": 0.6736850774385009
     },
     {
-      "trade_date": 20260130,
       "ts_code": "605289.SH",
+      "trade_date": 20260130,
       "industry": "装修装饰",
       "name": "罗曼股份",
       "close": 80.41,
@@ -211,8 +211,8 @@
       "prob": 0.6669997842384435
     },
     {
-      "trade_date": 20260130,
       "ts_code": "600313.SH",
+      "trade_date": 20260130,
       "industry": "农牧饲渔",
       "name": "农发种业",
       "close": 8.83,
