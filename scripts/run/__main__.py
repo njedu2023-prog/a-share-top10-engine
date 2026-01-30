@@ -589,7 +589,7 @@ def main() -> int:
 
     bt = run_backtest_loop(
         outputs_dir=(repo_root / "outputs").resolve(),
-        warehouse_dir=warehouse,
+        warehouse_root=warehouse,  # ✅ 只改这一处：warehouse_dir -> warehouse_root
         verify_date=str(trade_date),
         history_jsonl=(repo_root / "outputs" / "history" / "backtest.jsonl").resolve(),
         top_n_default=int(settings.top_n),
