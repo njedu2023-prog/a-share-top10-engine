@@ -1,46 +1,110 @@
-# ============================================================
-# A股 Top10 涨停预测引擎（a-share-top10-engine）
-# 系统配置文件 config/settings.yaml
-# ============================================================
+# =========================
+# Top10 Engine Settings
+# =========================
+# 目标：在 GitHub Actions 上自动拉取数据仓库（a-share-top3-data），
+#      识别交易日目录（兼容 data/raw/YYYY/YYYYMMDD 结构），
+#      生成 predict.json + predict.md 并提交回当前仓库。
+#
+# 注意：这里的 owner/name/ref 必须真实存在，否则会报：
+#   config/settings.yaml 缺少 data_repo.owner 或 data_repo.name
 
+app:
+  name: "a-share-top10-engine"
+  timezone: "Asia/Shanghai"
+  log_level: "INFO"
+
+# -------------------------
+# Data Repository (warehouse)
+# -------------------------
 data_repo:
-  owner: njedu2023-prog
-  name: a-share-top3-data
-  branch: main
+  owner: "njedu2023-prog"
+  name: "a-share-top3-data"
+  ref: "main"
+  # Actions 里会 clone 到：
+  #   <repo_root>/_warehouse
+  local_dir: "_warehouse"
 
-  # 数据快照根目录（仓库内路径）
-  # 期望结构：data/raw/YYYY/YYYYMMDD/...
-  snapshot_dir: data/raw
+# -------------------------
+# Trade date resolution
+# -------------------------
+trade_date:
+  # 如果 workflow 传了 TRADE_DATE=YYYYMMDD，就优先用它；
+  # 否则将根据下面的目录模板自动寻找“最新交易日目录”。
+  prefer_env: true
 
-  # 可选：如果数据仓库有 tags 目录就保留
-  tags_dir: tags
+# 关键：你的数据仓库目录结构是：
+#   data/raw/2026/20260129/...
+# 所以必须把对应的模板写进去，否则会报：
+#   无法定位任何交易日目录（仓库里完全没有 YYYYMMDD 目录）
+data_layout:
+  # 引擎会在 data_repo.local_dir 下尝试这些模板，
+  # {YYYY} = 交易日年份；{YYYYMMDD} = 交易日
+  trade_date_dir_templates:
+    - "data/raw/{YYYY}/{YYYYMMDD}"      # ✅ 你的仓库就是这种
+    - "data/raw/{YYYY}/{YYYYMMDD}/"
+    - "data/{YYYYMMDD}"                # 额外兼容（可有可无）
+    - "data/{YYYYMMDD}/"
 
-run_mode:
-  auto_pull_data_repo: true
+  # 用于“自动找最新交易日目录”的扫描范围（降低误判）
+  scan_roots:
+    - "data/raw"
+    - "data"
 
-  # 留空：由脚本自动选择最新交易日
-  # 若 GitHub Actions 设置了 env TRADE_DATE，会覆盖这里
-  trade_date: ""
-
-top10:
-  n: 10
-
-output:
-  root_dir: outputs
-
-  # 必须包含 predict_json / predict_md
+# -------------------------
+# Input files (expected in each trade date dir)
+# -------------------------
+# 这里按你仓库截图的文件来写（daily.csv / daily_basic.csv / moneyflow_hsgt.csv 等）
+inputs:
   files:
-    predict_json: daily/predict.json
-    predict_md: daily/predict.md
+    daily: "daily.csv"
+    daily_basic: "daily_basic.csv"
+    top_list: "top_list.csv"
+    moneyflow_hsgt: "moneyflow_hsgt.csv"
+    hot_boards: "hot_boards.csv"
+    limit_break_d: "limit_break_d.csv"
+    limit_list_d: "limit_list_d.csv"
+    stk_limit: "stk_limit.csv"
+    stock_basic: "stock_basic.csv"
+    namechange: "namechange.csv"
+    limit_up_tags: "limit_up_tags.csv"
+    meta: "_meta.json"
 
-  history_dir: history
-  log_dir: logs
+  # 缺文件时的策略：true=严格缺一个就失败；false=尽量跑完（更鲁棒）
+  strict: false
 
-secrets:
-  tushare_token_env: TUSHARE_TOKEN
+# -------------------------
+# Output
+# -------------------------
+# 关键：必须包含 predict_json 和 predict_md，否则会报：
+#   output.files 至少需要包含 predict_json / predict_md
+output:
+  # 输出根目录（在当前仓库内）
+  out_root: "outputs"
+  # 每次按交易日落一个子目录
+  per_trade_date_dir: true
 
-system:
-  name: "A股涨停预测系统 Top10 Engine"
-  architecture:
-    warehouse: a-share-top3-data
-    engine: a-share-top10-engine
+  files:
+    predict_json: "predict.json"
+    predict_md: "predict.md"
+    run_log_md: "run_log.md"
+
+  # 是否将输出提交回当前仓库
+  commit_back:
+    enabled: true
+    branch: "main"
+    commit_message_template: "data: update predictions ({trade_date})"
+    # 如果没有变更，是否跳过提交
+    skip_if_no_change: true
+
+# -------------------------
+# Engine behavior (tuning)
+# -------------------------
+engine:
+  # 产出 TopN
+  top_n: 10
+
+  # 这里留作扩展：你如果后面加策略/权重，可以集中放这里
+  params:
+    # 示例参数（不一定被代码用到，但保留结构最专业）
+    min_turnover: 0
+    exclude_st: true
