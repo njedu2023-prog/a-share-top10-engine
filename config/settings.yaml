@@ -4,36 +4,44 @@
 # ============================================================
 
 data_repo:
+  # 数据仓库（用于 clone 到 _warehouse）
   owner: njedu2023-prog
   name: a-share-top3-data
   branch: main
 
   # ✅ 真实数据快照目录（与你的仓库一致：data/raw/2026/20260129/...）
+  # 脚本会在 _warehouse 下基于这个目录去找 YYYY/YYYYMMDD 结构
   snapshot_dir: data/raw
 
-  # 如果你确实有 tags 目录就保留；没有也没关系（脚本不一定用）
+  # 可选：如果数据仓库确实有 tags 目录就保留；没有也没关系
   tags_dir: tags
 
 run_mode:
+  # 是否自动拉取数据仓库
   auto_pull_data_repo: true
+
+  # 交易日（workflow 里会用 env TRADE_DATE 覆盖；留空表示自动选择最新交易日）
   trade_date: ""
 
 top10:
   n: 10
 
-# ✅ 关键：脚本要求 output.files 至少包含 predict_json / predict_md
 output:
+  # 输出根目录（建议就用 outputs）
   root_dir: outputs
-  files:
-    # 你想放哪里都行，但建议固定到 outputs/daily
-    predict_json: outputs/daily/predict.json
-    predict_md: outputs/daily/predict.md
 
-  # 可选：顺手把历史/日志目录也集中在 output 下（如果脚本支持会用到）
-  history_dir: outputs/history
-  log_dir: outputs/logs
+  # ✅ 关键：脚本要求 output.files 至少包含 predict_json / predict_md
+  # 建议写“相对 root_dir 的相对路径”，更不容易出现双重 outputs/outputs 之类问题
+  files:
+    predict_json: daily/predict.json
+    predict_md: daily/predict.md
+
+  # 可选：历史/日志目录（若脚本支持会用到）
+  history_dir: history
+  log_dir: logs
 
 secrets:
+  # GitHub Actions secrets 里配置的 TUSHARE_TOKEN
   tushare_token_env: TUSHARE_TOKEN
 
 system:
