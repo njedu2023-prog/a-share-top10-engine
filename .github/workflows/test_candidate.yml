@@ -2,17 +2,49 @@ name: Candidate Pool Debug
 
 on:
   workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "交易日 YYYYMMDD（可选，留空则用默认）"
+        required: false
+        default: "20260129"
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUTF8: "1"
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout engine repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - run: pip install pandas
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || pip install pandas
 
-      - run: python -m a_share_top10_engine.candidate_pool
+      # 关键：准备数据仓库（a-share-top3-data）到 _warehouse 目录
+      - name: Prepare warehouse (clone data repo)
+        run: |
+          mkdir -p _warehouse
+          if [ -d "_warehouse/a-share-top3-data/.git" ]; then
+            echo "[warehouse] already exists, pull latest..."
+            cd _warehouse/a-share-top3-data
+            git fetch --all
+            git reset --hard origin/main
+            cd -
+          else
+            echo "[warehouse] cloning a-share-top3-data..."
+            git clone --depth 1 https://github.com/njedu2023-prog/a-share-top3-data.git _warehouse/a-share-top3-data
+          fi
+
+      - name: Run candidate_pool
+        run: |
+          echo "trade_date=${{ github.event.inputs.trade_date }}"
+          python -m a_share_top10_engine.candidate_pool
