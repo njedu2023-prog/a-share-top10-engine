@@ -22,12 +22,12 @@ generate_predict_pro_md.py
 """
 
 import argparse
-import os
+import json
 import re
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 
 # 北京时间时区（UTC+8）
 TZ_BJ = timezone(timedelta(hours=8))
@@ -72,6 +72,10 @@ def read_text(fp: Path) -> str:
 
 def write_text(fp: Path, text: str) -> None:
     fp.write_text(text, encoding="utf-8")
+
+
+def read_json(fp: Path) -> Any:
+    return json.loads(fp.read_text(encoding="utf-8", errors="replace"))
 
 
 def parse_title_and_table(md: str) -> Tuple[str, str]:
@@ -122,7 +126,7 @@ def parse_rows_from_table_html(table_html: str) -> List[Dict[str, str]]:
         if not tds:
             continue
         values = [strip_html(x) for x in tds]
-        row = {}
+        row: Dict[str, str] = {}
         if headers and len(headers) == len(values):
             for h, v in zip(headers, values):
                 row[h] = v
@@ -158,6 +162,320 @@ def to_markdown_table(rows: List[Dict[str, str]]) -> str:
     return "\n".join(out)
 
 
+def _to_float(x: str) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return float("-inf")
+
+
+# -----------------------------
+# ⑤ 解释与标签：启发式归因
+# -----------------------------
+_KEYWORD_SECTORS: List[Tuple[str, str]] = [
+    # 贵金属/有色
+    ("黄金", "贵金属/黄金"),
+    ("铝", "有色金属/铝"),
+    ("锌", "有色金属/锌"),
+    ("铜", "有色金属/铜"),
+    ("矿", "资源/采矿"),
+    ("锂", "新能源/锂电上游"),
+    ("稀土", "有色金属/稀土"),
+    # 能源/化工
+    ("能源", "能源/油气"),
+    ("石油", "能源/油气"),
+    ("煤", "能源/煤炭"),
+    ("化工", "化工"),
+    ("化学", "化工"),
+    # 农业/食品
+    ("种业", "农业/种业"),
+    ("农", "农业"),
+    ("粮", "农业/粮食"),
+    # 电力/光伏
+    ("光伏", "新能源/光伏"),
+    ("新能", "新能源"),
+    ("电", "电力/设备"),
+    # 基建/工程
+    ("工程", "基建/工程"),
+    ("建设", "基建/工程"),
+    ("诚", "（可能）基建/工程"),
+]
+
+# source_file -> 事件/信号
+_SOURCE_REASON: List[Tuple[str, str]] = [
+    ("limit_list", "来自涨停/强势池（短线情绪强，资金关注度高）"),
+    ("dragon", "来自龙虎榜/大单异动（资金博弈信号）"),
+    ("hot", "来自热度/情绪筛选（短线关注度）"),
+    ("north", "来自北向/外资偏好（资金流向信号）"),
+]
+
+
+def infer_sectors(rows: List[Dict[str, str]], topk: int = 5) -> List[str]:
+    """
+    用股票名称关键词做“热门板块/概念”启发式归因（无外部数据可直接跑）。
+    返回：按出现次数排序的 sector 列表。
+    """
+    if not rows:
+        return []
+
+    counts: Dict[str, int] = {}
+    for r in rows:
+        name = (r.get("name") or "").strip()
+        hit_any = False
+        for kw, sector in _KEYWORD_SECTORS:
+            if kw and kw in name:
+                counts[sector] = counts.get(sector, 0) + 1
+                hit_any = True
+        if not hit_any and name:
+            counts["其他/未识别"] = counts.get("其他/未识别", 0) + 1
+
+    ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    return [f"{k}（{v}）" for k, v in ranked[:topk]]
+
+
+def infer_selection_reasons(rows: List[Dict[str, str]]) -> List[str]:
+    """
+    生成“入选原因”要点（启发式）。
+    """
+    if not rows:
+        return ["未解析到 Top10 数据，无法生成入选原因。"]
+
+    # 1) 信号来源（source_file）
+    source_files = sorted({(r.get("source_file") or "").strip() for r in rows if (r.get("source_file") or "").strip()})
+    reason_lines: List[str] = []
+
+    if source_files:
+        matched = []
+        for sf in source_files:
+            low = sf.lower()
+            for key, desc in _SOURCE_REASON:
+                if key in low:
+                    matched.append(desc)
+        if matched:
+            # 去重保持顺序
+            seen = set()
+            uniq = []
+            for x in matched:
+                if x not in seen:
+                    uniq.append(x)
+                    seen.add(x)
+            reason_lines.append("信号来源： " + "；".join(uniq))
+        else:
+            reason_lines.append("信号来源：来自策略筛选结果（source_file 已记录，但未匹配到预置解释）。")
+    else:
+        reason_lines.append("信号来源：未提供 source_file 字段，暂按综合打分结果展示。")
+
+    # 2) 强信号：Top3 的 prob/score
+    ranked = rows[:]
+    if any("prob" in r for r in ranked):
+        ranked.sort(key=lambda r: _to_float(r.get("prob", "")), reverse=True)
+    else:
+        ranked.sort(key=lambda r: _to_float(r.get("score", "")), reverse=True)
+    top1 = ranked[0] if ranked else {}
+    if top1:
+        reason_lines.append(
+            f"强信号：榜首 `{top1.get('ts_code','')}` {top1.get('name','')} prob={top1.get('prob','')} score={top1.get('score','')}（用于快速聚焦）。"
+        )
+
+    # 3) 主题聚合
+    sectors = infer_sectors(rows, topk=3)
+    if sectors:
+        reason_lines.append("主题聚合：Top10 中出现较多的方向为 " + "、".join(sectors) + "。")
+
+    return reason_lines
+
+
+def infer_risks(rows: List[Dict[str, str]]) -> List[str]:
+    """
+    生成“风险提示”要点（启发式）。
+    """
+    if not rows:
+        return ["未解析到 Top10 数据，无法生成风险提示。"]
+
+    risks: List[str] = []
+
+    # 涨停/强势池风险
+    source_files = " ".join([(r.get("source_file") or "") for r in rows]).lower()
+    if "limit_list" in source_files:
+        risks.append("短线波动风险：来自涨停/强势池的标的通常波动更大，次日易分化/炸板。")
+        risks.append("流动性与滑点：强势股集合竞价/开盘阶段冲击成本可能显著，需控制仓位与下单方式。")
+
+    # 主题拥挤度：prob 高且集中
+    probs = [_to_float(r.get("prob", "")) for r in rows if (r.get("prob") or "").strip()]
+    probs = [p for p in probs if p > float("-inf")]
+    if probs:
+        high_cnt = sum(1 for p in probs if p >= 0.75)
+        if high_cnt >= 5:
+            risks.append("主题拥挤度风险：高概率标的数量较多，可能对应情绪一致预期，需防回撤。")
+
+    # 名称含 ST / 退 / 风险提示
+    for r in rows:
+        name = (r.get("name") or "").strip()
+        if "ST" in name or "退" in name:
+            risks.append("个股风险：名单包含 ST/退市相关字样，需核对交易限制与风险公告。")
+            break
+
+    # 通用风控
+    risks.append("通用提示：本输出为量化筛选结果，不构成投资建议；请结合停复牌/公告/监管风险进行二次过滤。")
+
+    # 去重
+    seen = set()
+    uniq = []
+    for x in risks:
+        if x not in seen:
+            uniq.append(x)
+            seen.add(x)
+    return uniq
+
+
+# -----------------------------
+# ⑥ 回测与命中统计：读取 history
+# -----------------------------
+def _get_record_date(rec: Dict[str, Any]) -> str:
+    """
+    从回测记录中选择一个“日期字段”，用于排序与窗口截取。
+    优先级：verify_date > target_date > target_trade_date > predict_date > date
+    """
+    for k in ["verify_date", "target_date", "target_trade_date", "predict_date", "date"]:
+        v = rec.get(k)
+        if isinstance(v, str) and re.fullmatch(r"\d{8}", v.strip()):
+            return v.strip()
+    return ""
+
+
+def load_backtest_records(history_dir: Path) -> List[Dict[str, Any]]:
+    """
+    优先读取 outputs/history/backtest.jsonl（多日累计）。
+    兜底读取 backtest_latest.json 或 backtest_*.json（单日或汇总）。
+    返回：list[record]
+    record 期望含：top_n、hit_count、hit_rate（若无则可由 hit_count/top_n 推导）
+    """
+    records: List[Dict[str, Any]] = []
+
+    jsonl_fp = history_dir / "backtest.jsonl"
+    if jsonl_fp.exists():
+        text = jsonl_fp.read_text(encoding="utf-8", errors="replace")
+        for ln in text.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                obj = json.loads(ln)
+                if isinstance(obj, dict):
+                    records.append(obj)
+            except Exception:
+                continue
+
+    if records:
+        return records
+
+    latest_fp = history_dir / "backtest_latest.json"
+    if latest_fp.exists():
+        try:
+            obj = read_json(latest_fp)
+            if isinstance(obj, dict):
+                records.append(obj)
+        except Exception:
+            pass
+
+    # 再兜底：找 backtest_YYYYMMDD.json
+    if not records:
+        candidates = []
+        for fp in history_dir.glob("backtest_*.json"):
+            m = re.search(r"backtest_(\d{8})\.json$", fp.name)
+            if m:
+                candidates.append((m.group(1), fp))
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for _, fp in candidates[:30]:
+            try:
+                obj = read_json(fp)
+                if isinstance(obj, dict):
+                    records.append(obj)
+            except Exception:
+                continue
+
+    return records
+
+
+def compute_recent_hit_rates(
+    history_dir: Path,
+    asof_date: str,
+    windows: List[int] = [5, 20],
+) -> Dict[int, Dict[str, Any]]:
+    """
+    计算过去 N 日命中率（加权：sum(hit_count)/sum(top_n)）。
+    只取 date <= asof_date 的记录，并按日期排序后取最近 N 条。
+    返回：{N: {"hit_rate": float, "hit_count": int, "total": int, "days": int, "note": str}}
+    """
+    out: Dict[int, Dict[str, Any]] = {}
+    records = load_backtest_records(history_dir)
+    if not records:
+        for w in windows:
+            out[w] = {"hit_rate": None, "hit_count": 0, "total": 0, "days": 0, "note": "未找到回测历史文件。"}
+        return out
+
+    # normalize & filter
+    norm: List[Dict[str, Any]] = []
+    for rec in records:
+        d = _get_record_date(rec)
+        if not d:
+            continue
+        if d <= asof_date:
+            norm.append(rec)
+
+    norm.sort(key=lambda r: _get_record_date(r))
+    if not norm:
+        for w in windows:
+            out[w] = {"hit_rate": None, "hit_count": 0, "total": 0, "days": 0, "note": "回测记录日期均晚于报告日期或缺失日期字段。"}
+        return out
+
+    for w in windows:
+        tail = norm[-w:] if len(norm) >= 1 else []
+        if not tail:
+            out[w] = {"hit_rate": None, "hit_count": 0, "total": 0, "days": 0, "note": "窗口内无回测记录。"}
+            continue
+
+        hit_sum = 0
+        total_sum = 0
+        used_days = 0
+
+        for rec in tail:
+            top_n = rec.get("top_n", None)
+            hit_count = rec.get("hit_count", None)
+
+            try:
+                top_n_i = int(top_n) if top_n is not None else 0
+            except Exception:
+                top_n_i = 0
+            try:
+                hit_i = int(hit_count) if hit_count is not None else 0
+            except Exception:
+                hit_i = 0
+
+            # 如果没有 top_n/hit_count，尝试用 hit_rate 推导（假设 top_n=10）
+            if top_n_i <= 0 and isinstance(rec.get("hit_rate"), (int, float)):
+                top_n_i = 10
+                hit_i = int(round(float(rec.get("hit_rate")) * top_n_i))
+
+            if top_n_i > 0:
+                hit_sum += max(0, hit_i)
+                total_sum += top_n_i
+                used_days += 1
+
+        if total_sum <= 0:
+            out[w] = {"hit_rate": None, "hit_count": 0, "total": 0, "days": used_days, "note": "回测记录缺少 top_n/hit_count。"}
+        else:
+            out[w] = {
+                "hit_rate": hit_sum / total_sum,
+                "hit_count": hit_sum,
+                "total": total_sum,
+                "days": used_days,
+                "note": "",
+            }
+
+    return out
+
+
 def build_pro_md(
     date_str: str,
     source_md_path: Path,
@@ -165,9 +483,10 @@ def build_pro_md(
     table_html: str,
     rows: List[Dict[str, str]],
     repo_hint: str = "a-share-top10-engine",
+    history_dir: Optional[Path] = None,
 ) -> str:
     """
-    生成专业版 MD 内容：包含头部元信息 + 原表格（HTML）+ Markdown 表格 + 扩展栏目占位
+    生成专业版 MD 内容：包含头部元信息 + 原表格（HTML）+ Markdown 表格 + 扩展栏目（⑤⑥自动生成）
     """
     # 尽量从 rows 推测来源文件
     source_files = sorted({r.get("source_file", "").strip() for r in rows if r.get("source_file")})
@@ -177,12 +496,6 @@ def build_pro_md(
     gen_time_bj = now_bj_str()
 
     # 推荐 Top3（按 prob 降序 / 若缺失则按 score）
-    def _to_float(x: str) -> float:
-        try:
-            return float(x)
-        except Exception:
-            return float("-inf")
-
     ranked = rows[:]
     if ranked and any("prob" in r for r in ranked):
         ranked.sort(key=lambda r: _to_float(r.get("prob", "")), reverse=True)
@@ -196,6 +509,21 @@ def build_pro_md(
             f"{i}. **{r.get('ts_code','')} {r.get('name','')}** ｜prob={r.get('prob','')}｜score={r.get('score','')}"
         )
     top3_block = "\n".join(top3_lines) if top3_lines else "_（无）_"
+
+    # ⑤ 自动生成：入选原因 / 热门板块 / 风险
+    reasons = infer_selection_reasons(rows)
+    sectors = infer_sectors(rows, topk=5)
+    risks = infer_risks(rows)
+
+    # ⑥ 自动生成：过去5/20日命中率
+    hit_stats = {}
+    if history_dir is not None:
+        hit_stats = compute_recent_hit_rates(history_dir=history_dir, asof_date=date_str, windows=[5, 20])
+
+    def _fmt_rate(x: Optional[float]) -> str:
+        if x is None:
+            return "N/A"
+        return f"{x*100:.2f}%"
 
     # 专业版正文
     md = []
@@ -220,16 +548,48 @@ def build_pro_md(
     md.append("")
     md.append(to_markdown_table(rows))
     md.append("")
-    md.append("## ⑤ 解释与标签（预留，后续接入更丰富因子）")
+    md.append("## ⑤ 解释与标签（自动生成）")
     md.append("")
-    md.append("- 入选原因摘要：_待接入（如：板块热度/情绪过滤/连板结构/龙虎榜/炸板等）_")
-    md.append("- 板块/概念归因：_待接入_")
-    md.append("- 风险提示：_待接入（如：停牌/一字板/新股/异常波动）_")
+    md.append("### 入选原因")
     md.append("")
-    md.append("## ⑥ 回测与命中统计（预留）")
+    for x in reasons:
+        md.append(f"- {x}")
     md.append("")
-    md.append("- 过去5日 Top10 命中：_待接入_")
-    md.append("- 过去20日 Top10 命中：_待接入_")
+    md.append("### 热门板块归因（启发式）")
+    md.append("")
+    if sectors:
+        md.append("- " + "、".join(sectors))
+    else:
+        md.append("- N/A（未识别到板块关键词）")
+    md.append("")
+    md.append("### 风险提示")
+    md.append("")
+    for x in risks:
+        md.append(f"- {x}")
+    md.append("")
+    md.append("## ⑥ 回测与命中统计（自动生成）")
+    md.append("")
+    if not hit_stats:
+        md.append("- 过去5日 Top10 命中率：N/A（未提供 history_dir 或未找到回测数据）")
+        md.append("- 过去20日 Top10 命中率：N/A（未提供 history_dir 或未找到回测数据）")
+    else:
+        s5 = hit_stats.get(5, {})
+        s20 = hit_stats.get(20, {})
+
+        if s5.get("hit_rate") is None:
+            md.append(f"- 过去5日 Top10 命中率：N/A（{s5.get('note','数据不足')}）")
+        else:
+            md.append(
+                f"- 过去5日 Top10 命中率：**{_fmt_rate(s5['hit_rate'])}**（命中 {s5['hit_count']} / 总 {s5['total']}，样本 {s5['days']} 日）"
+            )
+
+        if s20.get("hit_rate") is None:
+            md.append(f"- 过去20日 Top10 命中率：N/A（{s20.get('note','数据不足')}）")
+        else:
+            md.append(
+                f"- 过去20日 Top10 命中率：**{_fmt_rate(s20['hit_rate'])}**（命中 {s20['hit_count']} / 总 {s20['total']}，样本 {s20['days']} 日）"
+            )
+
     md.append("")
     md.append("---")
     md.append("**说明：**本文件由 `tools/generate_predict_pro_md.py` 生成，属于旁路增强输出，不影响原有 `outputs/predict/` 目录与既有链接。")
@@ -243,6 +603,7 @@ def main():
     ap.add_argument("--in", dest="in_path", default="", help="指定输入旧版 md 路径")
     ap.add_argument("--predict-dir", default="outputs/predict", help="旧版预测目录（默认 outputs/predict）")
     ap.add_argument("--out-dir", default="outputs/predict_pro", help="专业版输出目录（默认 outputs/predict_pro）")
+    ap.add_argument("--history-dir", default="outputs/history", help="回测历史目录（默认 outputs/history）")
     ap.add_argument("--repo-hint", default="a-share-top10-engine", help="仓库/引擎提示信息")
     args = ap.parse_args()
 
@@ -250,6 +611,7 @@ def main():
 
     predict_dir = repo_root / args.predict_dir
     out_dir = repo_root / args.out_dir
+    history_dir = repo_root / args.history_dir
     ensure_dir(out_dir)
 
     # 1) 确定输入文件
@@ -293,6 +655,7 @@ def main():
         table_html=table_html,
         rows=rows,
         repo_hint=args.repo_hint,
+        history_dir=history_dir,
     )
 
     out_fp = out_dir / f"predict_pro_{date_str}.md"
