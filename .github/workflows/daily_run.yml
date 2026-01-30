@@ -2,13 +2,12 @@ name: Top10 Engine - Scheduled Run
 
 on:
   schedule:
-    # 周一到周五 08:10（北京时间）跑
-    # GitHub Actions 用 UTC，所以这里是 00:10 UTC = 08:10 CST
-    - cron: "10 0 * * 1-5"
+    # 交易日早上 08:00（北京时间）跑一次：UTC 00:00
+    - cron: "0 0 * * 1-5"
   workflow_dispatch:
     inputs:
       trade_date:
-        description: "可选：指定交易日 YYYYMMDD（不填则自动找最新）"
+        description: "可选：指定交易日 YYYYMMDD（不填则自动取仓库最新目录）"
         required: false
         default: ""
 
@@ -17,7 +16,7 @@ permissions:
 
 concurrency:
   group: top10-engine
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   run:
@@ -26,57 +25,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
       - name: Install deps
         run: |
-          python -V
-          python -m pip install -U pip
+          python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f pyproject.toml ]; then pip install .; fi
-
-      - name: Resolve trade date
-        id: td
-        shell: bash
-        run: |
-          set -e
-          # 1) workflow_dispatch 输入优先
-          TD_INPUT="${{ github.event.inputs.trade_date }}"
-          if [ -n "$TD_INPUT" ]; then
-            echo "TRADE_DATE=$TD_INPUT" >> $GITHUB_ENV
-            echo "Using TRADE_DATE(from input)=$TD_INPUT"
-            exit 0
-          fi
-
-          # 2) 不指定则留空，让引擎按 settings.yaml 自动找最新交易日目录
-          echo "TRADE_DATE=" >> $GITHUB_ENV
-          echo "Using TRADE_DATE(auto) from engine resolver"
 
       - name: Run engine
         env:
-          TRADE_DATE: ${{ env.TRADE_DATE }}
+          # 关键：允许手动指定；不指定则留空，脚本会自动找最新交易日目录
+          TRADE_DATE: ${{ inputs.trade_date }}
         run: |
-          set -e
-          echo "TRADE_DATE=${TRADE_DATE}"
           python -m scripts.run
 
       - name: Commit outputs (if changed)
         run: |
-          set -e
-          git status --porcelain
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "No changes to commit."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "data: update predictions"
-          git push
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "outputs: update predictions"
+            git push
+          fi
