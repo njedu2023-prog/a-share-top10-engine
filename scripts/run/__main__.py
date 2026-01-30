@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -107,6 +107,52 @@ def _extract_yyyymmdd_from_path(p: Path) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _is_trade_dir_ready(trade_dir: Path, snapshot_candidates: List[str]) -> bool:
+    """
+    判定某交易日目录是否“可用于引擎跑通”：
+    - 至少存在一个候选文件
+    - 且该文件不仅有表头（至少有1行数据）
+    兼容：
+    - 0字节文件
+    - 只有空白
+    - 只有表头
+    """
+    for fn in snapshot_candidates:
+        fp = trade_dir / fn
+        if not fp.exists() or not fp.is_file():
+            continue
+
+        # 0字节/过小文件直接认为不可用
+        try:
+            if fp.stat().st_size < 5:
+                continue
+        except Exception:
+            continue
+
+        # 读取前几行判断：至少要有“表头 + 一行数据”
+        try:
+            non_empty_lines = []
+            with fp.open("r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if s:
+                        non_empty_lines.append(s)
+                    if len(non_empty_lines) >= 2:
+                        break
+            if len(non_empty_lines) >= 2:
+                return True
+        except Exception:
+            # 如果文本读失败，退而求其次用 pandas 快速试读
+            try:
+                df = pd.read_csv(fp)
+                if df is not None and not df.empty:
+                    return True
+            except Exception:
+                pass
+
+    return False
+
+
 # -------------------------
 # Build settings (fixes your errors)
 # -------------------------
@@ -165,28 +211,55 @@ def build_settings(cfg: Dict[str, Any]) -> Settings:
 # -------------------------
 
 def _resolve_trade_date_dir(settings: Settings) -> Tuple[str, Path]:
+    repo_root = Path.cwd().resolve()
+
     # 优先用用户指定
     user_td = os.getenv("TRADE_DATE", "").strip()
     if user_td:
         logger.info(f"收到用户指定 TRADE_DATE={user_td}")
-        trade_date = user_td
-        candidates = [_fmt_template(tpl, trade_date) for tpl in settings.trade_date_dirs]
-        for c in candidates:
-            p = (Path(settings.output.dir).parents[0] / c).resolve()  # safe join-ish
-            # 上面 join 对相对路径可能不准，这里更直接：以 repo_root 为基准在 main() 里处理
-        # 在 main() 里我们会传 repo_root 进行 resolve，这里只返回日期，目录在 main 里二次找
-        # 但为简洁，这里直接按 repo_root=当前工作目录处理：
-        repo_root = Path.cwd().resolve()
-        for c in candidates:
-            p = (repo_root / c).resolve()
-            if p.exists() and p.is_dir():
-                return trade_date, p
+
+        def locate_dir(yyyymmdd: str) -> Optional[Path]:
+            candidates = [_fmt_template(tpl, yyyymmdd) for tpl in settings.trade_date_dirs]
+            for c in candidates:
+                p = (repo_root / c).resolve()
+                if p.exists() and p.is_dir():
+                    return p
+            return None
+
+        # 1) 先尝试用户指定的当天目录
+        trade_dir = locate_dir(user_td)
+        if trade_dir and _is_trade_dir_ready(trade_dir, settings.snapshot_candidates):
+            return user_td, trade_dir
+
+        # 2) 如果目录存在但数据未出（只有表头/空文件），则回退到最近可用交易日
+        max_backtrack = int(os.getenv("MAX_BACKTRACK_DAYS", "30"))
+        if trade_dir:
+            logger.warning(
+                f"交易日 {user_td} 目录已存在但数据未就绪（候选文件为空/仅表头），将回退查找最近可用交易日，最多回退 {max_backtrack} 天。"
+            )
+        else:
+            logger.warning(
+                f"交易日 {user_td} 目录不存在，将回退查找最近可用交易日，最多回退 {max_backtrack} 天。"
+            )
+
+        try:
+            base_dt = datetime.strptime(user_td, "%Y%m%d")
+        except ValueError:
+            raise ValueError(f"TRADE_DATE 格式错误，应为 YYYYMMDD，实际: {user_td}")
+
+        for i in range(1, max_backtrack + 1):
+            d = (base_dt - timedelta(days=i)).strftime("%Y%m%d")
+            p = locate_dir(d)
+            if p and _is_trade_dir_ready(p, settings.snapshot_candidates):
+                logger.warning(f"回退成功：使用最近可用交易日 {d}，目录: {p}")
+                return d, p
+
         raise FileNotFoundError(
-            "无法定位指定交易日目录。已尝试路径模板:\n" + "\n".join(candidates)
+            f"无法定位可用交易日目录：从 {user_td} 向前回退 {max_backtrack} 天仍未找到可用数据目录。\n"
+            f"请检查数据仓库是否已同步生成候选文件，或调整 MAX_BACKTRACK_DAYS。"
         )
 
     # 否则：自动在 _warehouse 下搜集所有 YYYYMMDD 目录并取最大
-    repo_root = Path.cwd().resolve()
     warehouse = (repo_root / settings.data_repo.checkout_dir).resolve()
     if not warehouse.exists():
         raise FileNotFoundError(f"warehouse 不存在: {warehouse}")
@@ -207,10 +280,16 @@ def _resolve_trade_date_dir(settings: Settings) -> Tuple[str, Path]:
             f"提示：请检查 {warehouse} 下是否存在 data/raw/2026/20260129 这种结构。"
         )
 
-    ymd_dirs.sort(key=lambda x: x.name)
-    trade_dir = ymd_dirs[-1]
-    trade_date = trade_dir.name
-    return trade_date, trade_dir
+    # 从最新往前找“数据就绪”的目录
+    ymd_dirs.sort(key=lambda x: x.name, reverse=True)
+    for trade_dir in ymd_dirs:
+        if _is_trade_dir_ready(trade_dir, settings.snapshot_candidates):
+            trade_date = trade_dir.name
+            return trade_date, trade_dir
+
+    raise FileNotFoundError(
+        "找到交易日目录，但所有目录候选文件都未就绪（空/仅表头）。请检查数据仓库生成逻辑。"
+    )
 
 
 # -------------------------
