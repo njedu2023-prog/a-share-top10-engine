@@ -90,6 +90,11 @@ jobs:
           echo "Using TRADE_DATE=${TRADE_DATE}"
           python -m scripts.run
 
+      # ✅生成专业版报告（旁路增强，不影响旧版 predict 输出）
+      - name: Generate predict_pro report
+        run: |
+          python tools/generate_predict_pro_md.py
+
       - name: Commit outputs (if changed)
         run: |
           set -e
