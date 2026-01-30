@@ -10,7 +10,6 @@ on:
 
   workflow_dispatch:
 
-
 permissions:
   contents: write
 
@@ -48,6 +47,7 @@ jobs:
 
       - name: Resolve trade date
         id: resolve_trade_date
+        shell: bash
         run: |
           set -e
 
@@ -80,7 +80,8 @@ jobs:
           fi
 
           echo "✅ Resolved TRADE_DATE=$LATEST"
-          echo "TRADE_DATE=$LATEST" >> $GITHUB_ENV
+          echo "TRADE_DATE=$LATEST" >> "$GITHUB_ENV"
+          echo "trade_date=$LATEST" >> "$GITHUB_OUTPUT"
 
       - name: Run engine
         env:
