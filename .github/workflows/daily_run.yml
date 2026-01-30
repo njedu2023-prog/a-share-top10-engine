@@ -14,11 +14,9 @@ on:
     # 北京时间 周一到周五 19:05 运行（UTC 11:05）
     - cron: "5 11 * * 1-5"
 
-# 明确写权限：需要 push 回仓库
 permissions:
   contents: write
 
-# 避免同一分支多次触发相互覆盖（尤其 18:30/19:05 可能前一个没跑完）
 concurrency:
   group: top10-engine-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -53,22 +51,17 @@ jobs:
           fi
           pip install -r requirements.txt
 
-      # 关键修复：保证 schedule 触发时也一定有 TRADE_DATE
-      # 逻辑：
-      # - 手动触发且传了 inputs.trade_date -> 用它
-      # - 否则用“北京时间今天”的 YYYYMMDD（你的 scripts.run 若有更精确的交易日回退逻辑也能继续用）
       - name: Resolve trade date
-        id: td
         shell: bash
         run: |
           set -e
-          INPUT_TD="${{ inputs.trade_date }}"
+          INPUT_TD="${{ github.event.inputs.trade_date || '' }}"
           if [ -n "$INPUT_TD" ]; then
             TD="$INPUT_TD"
           else
             TD="$(date +%Y%m%d)"
           fi
-          echo "TRADE_DATE=$TD" >> $GITHUB_ENV
+          echo "TRADE_DATE=$TD" >> "$GITHUB_ENV"
           echo "Resolved TRADE_DATE=$TD"
 
       - name: Run engine
@@ -87,7 +80,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # 只提交输出目录（按项目写出路径）
-          # 如果你未来输出不止这两个目录，把路径补到这里即可
           git add -A outputs output || true
 
           if git diff --cached --quiet; then
@@ -96,4 +88,5 @@ jobs:
           fi
 
           git commit -m "chore: update top10 outputs [skip ci]"
+          git pull --rebase
           git push
