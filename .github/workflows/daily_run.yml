@@ -2,9 +2,14 @@ name: Top10 Engine - Scheduled Run
 
 on:
   schedule:
-    # 每个交易日早上 08:00 (Asia/Shanghai) ≈ 00:00 UTC
-    - cron: "0 0 * * 1-5"
+    # 北京时间 周一到周五 18:05（UTC 10:05）
+    - cron: "5 10 * * 1-5"
+
+    # 北京时间 周一到周五 18:35（UTC 10:35）
+    - cron: "35 10 * * 1-5"
+
   workflow_dispatch:
+
 
 permissions:
   contents: write
