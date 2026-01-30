@@ -153,6 +153,42 @@ def _is_trade_dir_ready(trade_dir: Path, snapshot_candidates: List[str]) -> bool
     return False
 
 
+def _find_next_trade_date(warehouse: Path, trade_date: str) -> Optional[str]:
+    """
+    在数据仓库中寻找下一个交易日目录（> trade_date）。
+    规则：扫描所有名为 YYYYMMDD 的目录，取最小的那个 “大于 trade_date” 的。
+    找不到则返回 None。
+    """
+    ymds: List[str] = []
+    for p in warehouse.rglob("*"):
+        if p.is_dir() and re.fullmatch(r"20\d{2}[01]\d[0-3]\d", p.name):
+            ymds.append(p.name)
+
+    if not ymds:
+        return None
+
+    ymds = sorted(set(ymds))
+    for d in ymds:
+        if d > trade_date:
+            return d
+    return None
+
+
+def _build_top_list(top_df: pd.DataFrame, top_n: int) -> List[Dict[str, Any]]:
+    """
+    回测只需要 code 字段；这里统一生成 top_list（list[dict]），每条至少包含 ts_code/code。
+    """
+    rows = top_df.head(top_n).to_dict(orient="records")
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        code = r.get("ts_code") or r.get("code") or r.get("symbol")
+        item = dict(r)
+        if code is not None:
+            item["ts_code"] = str(code)
+        out.append(item)
+    return out
+
+
 # -------------------------
 # Build settings (fixes your errors)
 # -------------------------
@@ -410,7 +446,7 @@ def to_probability(df: pd.DataFrame, prob_map: ProbMap) -> pd.DataFrame:
     return df2
 
 
-def write_outputs(trade_date: str, top_df: pd.DataFrame, settings: Settings) -> Tuple[Path, Path]:
+def write_outputs(trade_date: str, target_trade_date: str, top_df: pd.DataFrame, settings: Settings) -> Tuple[Path, Path]:
     repo_root = Path.cwd().resolve()
 
     def render(path_tpl: str) -> Path:
@@ -422,11 +458,24 @@ def write_outputs(trade_date: str, top_df: pd.DataFrame, settings: Settings) -> 
     predict_json = render(settings.output.files["predict_json"])
     predict_md = render(settings.output.files["predict_md"])
 
+    top_list = _build_top_list(top_df, int(settings.top_n))
+
     # JSON
     payload = {
+        # 兼容旧字段
         "trade_date": trade_date,
+
+        # ✅回测闭环必需字段
+        "predict_date": trade_date,
+        "target_trade_date": target_trade_date,
+
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "top_n": int(settings.top_n),
+
+        # ✅回测优先读 top_list
+        "top_list": top_list,
+
+        # 兼容旧字段
         "items": top_df.to_dict(orient="records"),
     }
     predict_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding=settings.encoding)
@@ -434,6 +483,9 @@ def write_outputs(trade_date: str, top_df: pd.DataFrame, settings: Settings) -> 
     # Markdown
     lines = []
     lines.append(f"# Top{settings.top_n} Prediction ({trade_date})")
+    lines.append("")
+    lines.append(f"- predict_date: {trade_date}")
+    lines.append(f"- target_trade_date: {target_trade_date}")
     lines.append("")
     cols = [c for c in ["ts_code", "name", "score", "prob", "__source_file__"] if c in top_df.columns]
     if not cols:
@@ -476,6 +528,10 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]  # scripts/run/__main__.py -> repo
     os.chdir(repo_root)
 
+    # ✅确保包可导入（GitHub Actions 下有时需要）
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
     cfg_path = repo_root / "config" / "settings.yaml"
 
     # logs
@@ -502,6 +558,10 @@ def main() -> int:
     trade_date, trade_dir = _resolve_trade_date_dir(settings)
     logger.info(f"定位到交易日: {trade_date}，目录: {trade_dir}")
 
+    # ✅推导目标验证日（一般是下一交易日；找不到则回退为当天）
+    target_trade_date = _find_next_trade_date(warehouse, trade_date) or trade_date
+    logger.info(f"目标验证日 target_trade_date: {target_trade_date}")
+
     # 3) 读取涨停池并打分
     df_pool = load_limitup_pool(trade_dir, settings.snapshot_candidates)
     logger.info(f"涨停池载入成功: rows={len(df_pool)}, cols={len(df_pool.columns)}")
@@ -516,13 +576,32 @@ def main() -> int:
         .reset_index(drop=True)
     )
 
-    predict_json, predict_md = write_outputs(trade_date, top_df, settings)
+    predict_json, predict_md = write_outputs(trade_date, target_trade_date, top_df, settings)
     logger.info(f"输出完成: {predict_json}")
     logger.info(f"输出完成: {predict_md}")
 
-    # 5) 追加历史
+    # 5) 追加历史（预测沉淀）
     append_history(trade_date, top_df, settings)
     logger.info(f"历史沉淀完成: {settings.output.history_append_jsonl}")
+
+    # 6) ✅模块⑤：回测闭环（验证“目标日=今天”的那条预测）
+    from a_share_top10_engine.backtest_loop import run_backtest_loop
+
+    bt = run_backtest_loop(
+        outputs_dir=(repo_root / "outputs").resolve(),
+        warehouse_dir=warehouse,
+        verify_date=str(trade_date),
+        history_jsonl=(repo_root / "outputs" / "history" / "backtest.jsonl").resolve(),
+        top_n_default=int(settings.top_n),
+    )
+
+    if bt:
+        logger.info(
+            f"[Backtest] verify={bt.verify_date} hit={bt.hit_count}/{bt.top_n} "
+            f"rate={bt.hit_rate} hit_codes={bt.hit_codes}"
+        )
+    else:
+        logger.info("[Backtest] 今日未找到 target_trade_date=今日 的待验证预测记录（第一天跑为空属正常）")
 
     logger.info("运行成功 ✅")
     return 0
